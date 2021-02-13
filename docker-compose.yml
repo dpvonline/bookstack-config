@@ -7,6 +7,8 @@ services:
     restart: unless-stopped
     volumes:
       - db:/var/lib/mysql
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     env_file:
       - db.env
     networks:
@@ -22,7 +24,9 @@ services:
     env_file:
       - wiki.env
     volumes:
-      - wiki:/config
+      - wiki-data:/var/www/bookstack
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     depends_on:
       - db
     networks:
@@ -40,6 +44,8 @@ services:
       - vhost.d:/etc/nginx/vhost.d
       - html:/usr/share/nginx/html
       - /var/run/docker.sock:/tmp/docker.sock:ro
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     networks:
       - proxy-tier
 
@@ -49,6 +55,8 @@ services:
     restart: unless-stopped
     volumes:
       - data-web:/usr/share/nginx/html:ro
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     env_file:
       - web.env
     networks:
@@ -64,10 +72,11 @@ services:
       - db.env
       - backup.env
     volumes:
-      - wiki:/data/wiki
+      - wiki-data:/data/wiki/data
       - backup:/backup/wiki
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     tty: true
     networks:
       - proxy-tier
@@ -85,10 +94,10 @@ volumes:
   vhost.d:
   html:
   acme:
-  wiki:
+  wiki-data:
     driver_opts:
       type: none
-      device: /data/wiki/data
+      device: /data/wiki/data/
       o: bind
   data-web:
     driver_opts:

@@ -36,6 +36,6 @@ apt install git -y
 ## Prepare folders
 mkdir -p /data/web/www
 mkdir -p /data/wiki/db
-mkdir -p //data/wiki/data
+mkdir -p /data/wiki/data
 mkdir -p /backup/wiki
 touch /backup/wiki/init

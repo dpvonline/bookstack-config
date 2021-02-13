@@ -1,3 +1,8 @@
+#!/usr/bin/env python
+__author__ = "OBI"
+__copyright__ = "Copyright 2021, DPV e.V."
+__license__ = "MIT"
+
 import argparse
 import logging
 import os
@@ -11,7 +16,7 @@ from docker import DockerUtils, DockerContainer
 from logger import logger, init_mail
 from params import PARAMS
 from util import init_params, timestamp_string, get_folder_size_in_bytes, get_folder_size_human, str2bool, \
-    check_dir_exist, check_file_exists, check_dir_empty
+    check_dir_exist, check_file_exists, check_dir_empty, fix_latest_link
 
 
 class BackupManager(object):
@@ -26,34 +31,34 @@ class BackupManager(object):
         self._db_server = params['MYSQL_HOST']
 
     def __activate_maintenance(self):
-        DockerUtils.run_cmd(cmd="docker stop wiki_app", container=DockerContainer.LOCAL)
+        DockerUtils.run_cmd(cmd="docker stop wiki_app", container=DockerContainer.BACKUP)
 
     def __deactivate_maintenance(self):
         DockerUtils.run_cmd(cmd="docker start wiki_app",
-                            container=DockerContainer.LOCAL)
+                            container=DockerContainer.BACKUP)
 
     def __verify_prior_backup(self):
         # Check if data dir is present and non-empty
-        if not check_dir_exist(self._data_dir, container=DockerContainer.LOCAL):
+        if not check_dir_exist(self._data_dir, container=DockerContainer.BACKUP):
             logger.error("Data dir not present.")
             raise
 
-        if check_dir_empty(self._data_dir, container=DockerContainer.LOCAL):
+        if check_dir_empty(self._data_dir, container=DockerContainer.BACKUP):
             logger.error("Data dir empty.")
             raise
 
         # Check if backup dir is present and non-empty
-        if not check_dir_exist(self._backup_dir, container=DockerContainer.LOCAL):
+        if not check_dir_exist(self._backup_dir, container=DockerContainer.BACKUP):
             logger.error("Backup dir not present.")
             raise
 
-        if check_dir_empty(self._backup_dir, container=DockerContainer.LOCAL):
+        if check_dir_empty(self._backup_dir, container=DockerContainer.BACKUP):
             logger.error("Backup dir empty. Check mount")
             raise
 
     def __backup_database(self, backup_dir: str):
         cmd_mkdir = "mkdir -p {}".format(backup_dir)
-        DockerUtils.run_cmd(cmd=cmd_mkdir, container=DockerContainer.LOCAL)
+        DockerUtils.run_cmd(cmd=cmd_mkdir, container=DockerContainer.BACKUP)
 
         cmd = "mysqldump --single-transaction --column-statistics=0 -h {server} -u {user} -p{pwd} {db} > {path}/backup.sql".format(
             server=self._db_server,
@@ -61,49 +66,49 @@ class BackupManager(object):
             pwd=self._db_password,
             db=self._database,
             path=Path(backup_dir))
-        DockerUtils.run_cmd(cmd=cmd, container=DockerContainer.LOCAL)
+        DockerUtils.run_cmd(cmd=cmd, container=DockerContainer.BACKUP)
 
     def __backup_data(self, backup_dir: str, incremental=False):
-        if incremental and not check_dir_exist(self._latest_dir, container=DockerContainer.LOCAL):
+        if incremental and not check_dir_exist(self._latest_dir, container=DockerContainer.BACKUP):
             logger.error("Can no perform incremental backup. Missing folder {}".format(self._latest_dir))
             incremental = False
 
         if not incremental:
-            cmd = "rsync -az {source} {target}".format(source=self._data_dir, target=Path(backup_dir))
+            cmd = "rsync -az {source}/ {target}/data".format(source=self._data_dir, target=Path(backup_dir))
         else:
-            cmd = "rsync -az {source} --link-dest {latest} {target}".format(source=self._data_dir,
-                                                                            latest=self._latest_dir,
-                                                                            target=Path(backup_dir))
+            cmd = "rsync -az {source}/ --link-dest {latest}/data {target}/data".format(source=self._data_dir,
+                                                                                  latest=self._latest_dir,
+                                                                                  target=Path(backup_dir))
 
-        DockerUtils.run_cmd(cmd=cmd, container=DockerContainer.LOCAL)
+        DockerUtils.run_cmd(cmd=cmd, container=DockerContainer.BACKUP)
 
         cmd_link = "rm -rf {latest} && ln -s {backup_dir} {latest}".format(backup_dir=backup_dir,
                                                                            latest=self._latest_dir)
-        DockerUtils.run_cmd(cmd=cmd_link, container=DockerContainer.LOCAL)
+        DockerUtils.run_cmd(cmd=cmd_link, container=DockerContainer.BACKUP)
 
     def __verify_post_backup(self, backup_dir: str):
         # Check that database backup is there
         logger.info("Verifying backup sanity from {}".format(backup_dir))
         db_backup_fn = "{path}/backup.sql".format(path=Path(backup_dir))
-        if not check_file_exists(db_backup_fn, container=DockerContainer.LOCAL):
+        if not check_file_exists(db_backup_fn, container=DockerContainer.BACKUP):
             logger.error("Database backup file {} not present.".format(db_backup_fn))
             raise
 
-        data_backup_dir = "{path}/".format(path=Path(backup_dir))
-        if not check_dir_exist(data_backup_dir, container=DockerContainer.LOCAL):
+        data_backup_dir = "{path}/data".format(path=Path(backup_dir))
+        if not check_dir_exist(data_backup_dir, container=DockerContainer.BACKUP):
             logger.error("Data backup directory {} non-existent.".format(data_backup_dir))
             raise
 
-        if check_dir_empty(data_backup_dir, container=DockerContainer.LOCAL):
+        if check_dir_empty(data_backup_dir, container=DockerContainer.BACKUP):
             logger.error("Data backup directory {} empty.".format(data_backup_dir))
             raise
 
-        backup_size = get_folder_size_in_bytes(data_backup_dir, container=DockerContainer.LOCAL)
+        backup_size = get_folder_size_in_bytes(data_backup_dir, container=DockerContainer.BACKUP)
         if backup_size == 0:
             logger.error("Backup size: {}.".format(backup_size))
             raise
 
-        backup_size_str = get_folder_size_human(data_backup_dir, container=DockerContainer.LOCAL)
+        backup_size_str = get_folder_size_human(data_backup_dir, container=DockerContainer.BACKUP)
         logger.info("Backup successful verified in {}".format(backup_size_str))
 
     def __verify_prior_restore(self, backup_dir: str):
@@ -115,14 +120,14 @@ class BackupManager(object):
                                                                                           user=self._db_user,
                                                                                           pwd=self._db_password,
                                                                                           db=self._database)
-        DockerUtils.run_cmd(cmd=cmd_drop, container=DockerContainer.LOCAL)
+        DockerUtils.run_cmd(cmd=cmd_drop, container=DockerContainer.BACKUP)
 
         # Create
         cmd_create = "mysql -h {server} -u {user} -p{pwd} -e \"CREATE DATABASE {db}\"".format(server=self._db_server,
                                                                                               user=self._db_user,
                                                                                               pwd=self._db_password,
                                                                                               db=self._database)
-        DockerUtils.run_cmd(cmd=cmd_create, container=DockerContainer.LOCAL)
+        DockerUtils.run_cmd(cmd=cmd_create, container=DockerContainer.BACKUP)
 
         # Restore
         cmd_restore = "mysql -h {server} -u {user} -p{pwd} {db} < {path}/backup.sql".format(server=self._db_server,
@@ -130,15 +135,11 @@ class BackupManager(object):
                                                                                             pwd=self._db_password,
                                                                                             db=self._database,
                                                                                             path=Path(backup_dir))
-        DockerUtils.run_cmd(cmd=cmd_restore, container=DockerContainer.LOCAL)
+        DockerUtils.run_cmd(cmd=cmd_restore, container=DockerContainer.BACKUP)
 
     def __restore_data(self, backup_dir: str):
-        cmd = "rsync -az --delete {}/ {}".format(Path(backup_dir), self._data_dir)
-        DockerUtils.run_cmd(cmd=cmd, container=DockerContainer.LOCAL)
-
-    def __refresh_fingerprints(self):
-        DockerUtils.run_cmd(cmd="sudo -u www-data php ./occ maintenance:data-fingerprint",
-                            container=DockerContainer.NEXTCLOUD)
+        cmd = "rsync -az --delete {}/data/ {}".format(Path(backup_dir), self._data_dir)
+        DockerUtils.run_cmd(cmd=cmd, container=DockerContainer.BACKUP)
 
     def __verify_post_restore(self):
         self.__verify_prior_backup()
@@ -167,7 +168,6 @@ class BackupManager(object):
             self.__verify_prior_restore(backup_dir=backup_dir)
             self.__restore_database(backup_dir=backup_dir)
             self.__restore_data(backup_dir=backup_dir)
-            self.__refresh_fingerprints()
             self.__verify_post_restore()
         finally:
             self.__deactivate_maintenance()
@@ -190,6 +190,7 @@ class BackupManager(object):
         for location, rotation_scheme, options in res:
             options['prefer_recent'] = True
             rotate_backups.RotateBackups(rotation_scheme=rotation_scheme, **options).rotate_backups(location)
+        fix_latest_link(self._backup_dir, self._latest_dir, container=DockerContainer.BACKUP)
 
 
 if __name__ == "__main__":
@@ -237,10 +238,11 @@ if __name__ == "__main__":
         for c, val in enumerate(backups):
             logger.info("   #{}:    {}".format(c, val))
 
-        backup_id = 0
         backup_id = int(input("Enter backup to restore:"))
         assert backup_id < len(backups)
         backup_manager.restore_backup(backups[backup_id])
 
     if args.clean:
         backup_manager.clean_backups()
+
+    logging.shutdown()
