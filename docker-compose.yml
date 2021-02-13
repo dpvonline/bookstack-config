@@ -1,0 +1,105 @@
+version: '3'
+
+services:
+  db:
+    image: mariadb
+    container_name: wiki_db
+    restart: unless-stopped
+    volumes:
+      - db:/var/lib/mysql
+    env_file:
+      - db.env
+    networks:
+      - proxy-tier
+
+
+  bookstack:
+    image: solidnerd/bookstack
+    container_name: wiki_app
+    restart: unless-stopped
+    environment:
+      - DB_HOST=db
+    env_file:
+      - wiki.env
+    volumes:
+      - wiki:/config
+    depends_on:
+      - db
+    networks:
+      - proxy-tier
+
+  proxy:
+    image: jwilder/nginx-proxy:alpine
+    container_name: wiki_proxy
+    restart: unless-stopped
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - certs:/etc/nginx/certs:ro
+      - vhost.d:/etc/nginx/vhost.d
+      - html:/usr/share/nginx/html
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+    networks:
+      - proxy-tier
+
+  web:
+    image: nginx
+    container_name: wiki_web
+    restart: unless-stopped
+    volumes:
+      - data-web:/usr/share/nginx/html:ro
+    env_file:
+      - web.env
+    networks:
+      - proxy-tier
+
+  backup:
+    build: ./backup
+    container_name: wiki_backup
+    restart: unless-stopped
+    environment:
+      - MYSQL_HOST=db
+    env_file:
+      - db.env
+      - backup.env
+    volumes:
+      - wiki:/data/wiki
+      - backup:/backup/wiki
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /etc/localtime:/etc/localtime:ro
+    tty: true
+    networks:
+      - proxy-tier
+    depends_on:
+      - db
+
+
+volumes:
+  db:
+    driver_opts:
+      type: none
+      device: /data/wiki/db
+      o: bind
+  certs:
+  vhost.d:
+  html:
+  acme:
+  wiki:
+    driver_opts:
+      type: none
+      device: /data/wiki/data
+      o: bind
+  data-web:
+    driver_opts:
+      type: none
+      device: /data/web/www
+      o: bind
+  backup:
+    driver_opts:
+      type: none
+      device: /backup/wiki
+      o: bind
+
+networks:
+  proxy-tier:
